@@ -4,7 +4,6 @@ import os
 import rospy
 import rospkg
 import dynamic_reconfigure.client
-from rosplot import ROSData, RosPlotException
 
 # Import all necessary message types:
 from std_msgs.msg import Float32, Int16, String
@@ -66,7 +65,6 @@ class CopterPlugin(Plugin):
         self._subscriber = rospy.Subscriber('flight_mode', String, self._string_callback)
         self._subscriber = rospy.Subscriber('vicon/auk/auk', TransformStamped, self._transform_callback)
         self._start_time = rospy.get_time()
-        print self._start_time
         self._widget.plots.add_curve('plot1', 'Testplot', [self.plot_buffer_x], [self.plot_buffer_y])
 
         # Bring up dynamic reconfigure for EKF init
