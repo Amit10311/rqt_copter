@@ -3,22 +3,28 @@ from __future__ import division
 import os
 import rospy
 import rospkg
+import dynamic_reconfigure.client
+from rosplot import ROSData, RosPlotException
 
 # Import all necessary message types:
-from std_msgs.msg import Float32, Int16
+from std_msgs.msg import Float32, Int16, String
 from geometry_msgs.msg import TransformStamped
 
 # Qt related imports:
 from qt_gui.plugin import Plugin
 from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QTimer
-from python_qt_binding.QtGui import QWidget, QColor
+from python_qt_binding.QtGui import QWidget, QColor, QLabel
+from mat_data_plot import MatDataPlot
 
 
 class CopterPlugin(Plugin):
 
     scale = 0
-    voltage = 100
+    voltage = 50
+    flight_mode_ll = "none"
+    plot_buffer_x = 0
+    plot_buffer_y = 0
 
     def __init__(self, context):
         super(CopterPlugin, self).__init__(context)
@@ -46,10 +52,25 @@ class CopterPlugin(Plugin):
             self._widget.setWindowTitle(self._widget.windowTitle() + (' (%d)' % context.serial_number()))
         # Add widget to the user interface
         context.add_widget(self._widget)
+        
+        # Add the Plot to the GUI
+        width = self._widget.plots.width()
+        height = self._widget.plots.height()
+        self._widget.plots = MatDataPlot(self._widget.plots)
+        self._widget.plots.setGeometry(0, 0, width, height)
+        self._widget.plots.show()
 
         # Create Publisher and Subscriber
-        self._publisher = rospy.Publisher('value', Int16)
+        # self._publisher = rospy.Publisher('value', Int16)
         self._subscriber = rospy.Subscriber('voltage', Int16, self._sub_callback)
+        self._subscriber = rospy.Subscriber('flight_mode', String, self._string_callback)
+        self._subscriber = rospy.Subscriber('vicon/auk/auk', TransformStamped, self._transform_callback)
+        self._start_time = rospy.get_time()
+        print self._start_time
+        self._widget.plots.add_curve('plot1', 'Testplot', [self.plot_buffer_x], [self.plot_buffer_y])
+
+        # Bring up dynamic reconfigure for EKF init
+        #self._client = dynamic_reconfigure.client.Client("pose_sensor", timeout=2)
 
         # Initialize Timer
         self._timer = QTimer(self)
@@ -73,12 +94,18 @@ class CopterPlugin(Plugin):
         self.scale = var
 
     def _on_button_click(self):
-        msg = Int16()
-        msg.data = self.scale*100
-        self._publisher.publish(msg)
+        #self._client.update_configuration({"scale_init":self.scale*100})
+        pass
 
     def _sub_callback(self, input):
         self.voltage = input.data
+
+    def _string_callback(self, input):
+        self.flight_mode_ll = input.data
+
+    def _transform_callback(self, input):
+        self.plot_buffer_y = input.transform.translation.x
+        self.plot_buffer_x = input.header.stamp.to_sec()
 
     def _timer_update(self):
         self._widget.battery_voltage.setValue(self.voltage)
@@ -86,11 +113,13 @@ class CopterPlugin(Plugin):
             self._widget.battery_voltage_alert.setVisible(1)
         else:
             self._widget.battery_voltage_alert.setVisible(0)
+
+        self._widget.flight_mode_ll.setText(self.flight_mode_ll)
+        
+        self._widget.plots.update_values('plot1', [self.plot_buffer_x], [self.plot_buffer_y])
+        self._widget.plots.redraw()
     
     def shutdown_plugin(self):
-        if self._publisher is not None:
-            self._publisher.unregister()
-        self._publisher = None
         self._timer.stop()
 
     def save_settings(self, plugin_settings, instance_settings):
