@@ -1,0 +1,20 @@
+<library path="src">
+  <class name="Copter Plugin" type="rqt_copter.rqt_copter.CopterPlugin" base_class_type="rqt_gui_py::Plugin">
+    <description>
+      A Python GUI plugin to display and set copter parameters.
+    </description>
+    <qtgui>
+      <!-- optional grouping...
+      <group>
+        <label>Group</label>
+      </group>
+      <group>
+        <label>Subgroup</label>
+      </group>
+      -->
+      <label>Copter</label>
+      <icon type="file">resource/copter.png</icon>
+      <statustip>A Python GUI plugin to display and set copter parameters.</statustip>
+    </qtgui>
+  </class>
+</library>
