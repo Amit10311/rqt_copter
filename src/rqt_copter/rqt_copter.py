@@ -7,6 +7,9 @@ import rospkg
 
 # Import all necessary message types:
 from geometry_msgs.msg import TransformStamped
+# TODO get message information correct!
+from _ExtEkf import ExtEkf
+from _mav_status import mav_status
 
 # Qt related imports:
 from qt_gui.plugin import Plugin
@@ -21,13 +24,17 @@ class CopterPlugin(Plugin):
 
     # 'Buffer' for Plots
     voltage = 10
+    status_time = 0
+
     position = [0, 0, 0]
     velocity = [0, 0, 0]
     acceleration_bias = [0, 0, 0]
     scale = 0
-    time = 0
+    state_time = 0
+
     pause = 0
 
+    # Observed parameters
     cpu_load = 0
     flight_mode_ll = 'flight_mode'
     state_estimation = 'state_estimate'
@@ -35,7 +42,7 @@ class CopterPlugin(Plugin):
     motor_status = 'motor_status'
     flight_time = 0
     gps_status = 'gps_status'
-    gps_num_satelites = 0
+    gps_num_satellites = 0
 
     def __init__(self, context):
         super(CopterPlugin, self).__init__(context)
@@ -63,19 +70,24 @@ class CopterPlugin(Plugin):
 
         # Initialize the Timer
         self._start_time = rospy.get_time()
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._timer_update)
-        # TODO: 11 parralel plots are expensive. Increase timer value for better performance:
-        # Decrease for smoother plots :)
-        self._timer.start(250)
+        # A slow timer for the redrawing and the widget update.
+        # 11 Plots are expensive...
+        self._slow_timer = QTimer(self)
+        self._slow_timer.timeout.connect(self._slow_timer_update)
+        self._slow_timer.start(200)
+        # Fast timer for adding plot data for smooth curves
+        self._fast_timer = QTimer(self)
+        self._fast_timer.timeout.connect(self._fast_timer_update)
+        self._fast_timer.start(50)
 
         # Initialize all Plots and Subscribers
-        self.plot_battery_voltage = None;
-        self.plot_position = None;
-        self.plot_velocity = None;
-        self.plot_acceleration_bias = None;
-        self.plot_scale = None;
-        self._subscriber = None;
+        self.plot_battery_voltage = None
+        self.plot_position = None
+        self.plot_velocity = None
+        self.plot_acceleration_bias = None
+        self.plot_scale = None
+        self._state_subscriber = None
+        self._status_subscriber = None
 
         # Add Event Functions
         self._widget.start_reset_plot_button.clicked.connect(self._reset_plots)
@@ -85,37 +97,19 @@ class CopterPlugin(Plugin):
         # Bring up dynamic reconfigure (needed?)
         # self._client = dynamic_reconfigure.client.Client("pose_sensor", timeout=2)
 
-    def _timer_update(self):
+    def _slow_timer_update(self):
         # Update all Plots if they exist:
-        if self.plot_battery_voltage is not None:
-            self.plot_battery_voltage.update_values('voltage', [self.time], [self.voltage])
-            self.plot_battery_voltage.redraw()
-
-        if self.plot_position is not None:
-            self.plot_position.update_values('x', [self.time], [self.position[0]])
-            self.plot_position.update_values('y', [self.time], [self.position[1]])
-            self.plot_position.update_values('z', [self.time], [self.position[2]])
-            if not self.pause:
+        if not self.pause:
+            if self.plot_battery_voltage is not None:
+                self.plot_battery_voltage.redraw()
+            if self.plot_position is not None:
                 self.plot_position.redraw()
-
-        if self.plot_velocity is not None and not self.pause:
-            self.plot_velocity.update_values('x', [self.time], [self.velocity[0]])
-            self.plot_velocity.update_values('y', [self.time], [self.velocity[1]])
-            self.plot_velocity.update_values('z', [self.time], [self.velocity[2]])
-            if not self.pause:
+            if self.plot_velocity is not None:
                 self.plot_velocity.redraw()
-
-        if self.plot_acceleration_bias is not None:
-            self.plot_acceleration_bias.update_values('x', [self.time], [self.acceleration_bias[0]])
-            self.plot_acceleration_bias.update_values('y', [self.time], [self.acceleration_bias[1]])
-            self.plot_acceleration_bias.update_values('z', [self.time], [self.acceleration_bias[2]])
-            if not self.pause:
+            if self.plot_acceleration_bias is not None:
                 self.plot_acceleration_bias.redraw()
-
-        if self.plot_scale is not None:
-            self.plot_scale.update_values('scale', [self.time], [self.scale])
-            if not self.pause:
-                self.plot_scale.redraw()
+            if self.plot_scale is not None:
+                   self.plot_scale.redraw()
 
         # Check if Voltage low
         if self.voltage < 10:
@@ -131,8 +125,32 @@ class CopterPlugin(Plugin):
         self._widget.motor_status_textbox.setText(self.motor_status)
         self._widget.flight_time_box.setValue(self.flight_time)
         self._widget.gps_status_textbox.setText(self.gps_status)
-        self._widget.gps_num_satelites_box.setValue(self.gps_num_satelites)
+        self._widget.gps_num_satellites_box.setValue(self.gps_num_satellites)
         self._widget.battery_voltage_display.setValue(self.voltage)
+
+    def _fast_timer_update(self):
+        # This loop is seperate for performance.
+        # Plots stay smooth but can be drawn in the slow timer loop in this way.
+        if self.plot_battery_voltage is not None:
+            self.plot_battery_voltage.update_values('voltage', [self.status_time], [self.voltage])
+
+        if self.plot_position is not None:
+            self.plot_position.update_values('x', [self.state_time], [self.position[0]])
+            self.plot_position.update_values('y', [self.state_time], [self.position[1]])
+            self.plot_position.update_values('z', [self.state_time], [self.position[2]])
+
+        if self.plot_velocity is not None:
+            self.plot_velocity.update_values('x', [self.state_time], [self.velocity[0]])
+            self.plot_velocity.update_values('y', [self.state_time], [self.velocity[1]])
+            self.plot_velocity.update_values('z', [self.state_time], [self.velocity[2]])
+
+        if self.plot_acceleration_bias is not None:
+            self.plot_acceleration_bias.update_values('x', [self.state_time], [self.acceleration_bias[0]])
+            self.plot_acceleration_bias.update_values('y', [self.state_time], [self.acceleration_bias[1]])
+            self.plot_acceleration_bias.update_values('z', [self.state_time], [self.acceleration_bias[2]])
+
+        if self.plot_scale is not None:
+            self.plot_scale.update_values('scale', [self.state_time], [self.scale])
 
     def _pause_resume_plots(self):
         if self.pause is 0:
@@ -146,38 +164,43 @@ class CopterPlugin(Plugin):
         # Get the current namespace and the according topics
         namespace = self._widget.copter_namespace_textbox.text()
 
-        # TODO: When message is available remove dummy-subscription
-        # topic = namespace + '/this/is/the/topic'
-        topic = '/vicon/auk/auk'
-        print "Subscribing to", topic
+        state_topic = namespace + '/fcu/ekf_state_out'
+        status_topic = namespace + '/fcu/status'
+        print "Subscribing to", state_topic
+        print "Subscribing to", status_topic
 
-        if self._subscriber is not None:
-            self._subscriber.unregister()
+        if self._state_subscriber is not None:
+            self._state_subscriber.unregister()
+        if self._status_subscriber is not None:
+            self._status_subscriber.unregister()
 
-        self._subscriber = rospy.Subscriber(topic, TransformStamped, self._subscriber_callback)
+        self._state_subscriber = rospy.Subscriber(state_topic, ExtEkf, self._state_subscriber_callback)
+        self._status_subscriber = rospy.Subscriber(status_topic, mav_status, self._status_subscriber_callback)
 
         # Activate the tab widget at first click
         if not self._widget.tab_widget.isEnabled():
             self._widget.tab_widget.setEnabled(1)
 
-    def _subscriber_callback(self, input):
-        # save current values for plotting in class variables:
-        self.time = input.header.stamp.to_sec()
+    def _state_subscriber_callback(self, input):
+        # save current values for plotting in timerupdate
+        self.state_time = input.header.stamp.to_sec()
+        self.position = [input.state[0], input.state[1], input.state[2]]
+        self.velocity = [input.state[3], input.state[4], input.state[5]]
+        self.acceleration_bias = [input.state[6], input.state[7], input.state[8]]
+        self.scale = input.state[9]
 
-        # TODO: exchange the dummy-values for the correct message
-        self.voltage = 10
-        self.position = [input.transform.translation.x, input.transform.translation.y, input.transform.translation.z]
-        self.velocity = [0, 0, 0]
-        self.acceleration_bias = [0, 0, 0]
-        self.scale = 0
-        self.cpu_load = 57
-        self.flight_mode_ll = 'flight_mode'
-        self.state_estimation = 'state_estimate'
-        self.position_control = 'position_control'
-        self.motor_status = 'motor_status'
-        self.flight_time = 167
-        self.gps_status = 'gps_status'
-        self.gps_num_satelites = 3
+    def _status_subscriber_callback(self, input):
+        # save current values for widget updates in timerupdate
+        self.status_time = input.header.stamp.to_sec()
+        self.voltage = input.battery_voltage
+        self.cpu_load = input.cpu_load
+        self.flight_mode_ll = input.flight_mode_ll
+        self.state_estimation = input.state_estimation
+        self.position_control = input.position_control
+        self.motor_status = input.motor_status
+        self.flight_time = input.flight_time
+        self.gps_status = input.gps_status
+        self.gps_num_satellites = input.gps_num_satellites
 
     def _reset_plots(self):
         # Set the "Start" Button to "Reset"
@@ -240,9 +263,12 @@ class CopterPlugin(Plugin):
         self.plot_scale.add_curve('scale', 'visual scale', [0], [0])
     
     def shutdown_plugin(self):
-        self._timer.stop()
-        if self._subscriber is not None:
-            self._subscriber.unregister()
+        self._slow_timer.stop()
+        self._fast_timer.stop()
+        if self._state_subscriber is not None:
+            self._state_subscriber.unregister()
+        if self._status_subscriber is not None:
+            self._status_subscriber.unregister()
 
     def save_settings(self, plugin_settings, instance_settings):
         # TODO save intrinsic configuration, usually using:
