@@ -30,6 +30,9 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
+# Modified Version July 2013
+# Georg Wiedebach
+
 from python_qt_binding import QT_BINDING, QT_BINDING_VERSION
 if QT_BINDING == 'pyside':
     try:
@@ -77,16 +80,16 @@ class MatDataPlot(QWidget):
 
         def resizeEvent(self, event):
             super(MatDataPlot.Canvas, self).resizeEvent(event)
-            self.figure.tight_layout()
+            #self.figure.tight_layout()
 
-    _colors = [Qt.red, Qt.blue, Qt.magenta, Qt.cyan, Qt.green, Qt.darkYellow, Qt.black, Qt.darkRed, Qt.gray, Qt.darkCyan]
+    _colors = [Qt.red, Qt.green, Qt.blue, Qt.magenta, Qt.cyan, Qt.darkYellow, Qt.black, Qt.darkRed, Qt.gray, Qt.darkCyan]
 
     def __init__(self, parent=None):
         super(MatDataPlot, self).__init__(parent)
         self._canvas = MatDataPlot.Canvas()
-        self._toolbar = NavigationToolbar(self._canvas, self._canvas)
+        #self._toolbar = NavigationToolbar(self._canvas, self._canvas)
         vbox = QVBoxLayout()
-        vbox.addWidget(self._toolbar)
+        #vbox.addWidget(self._toolbar)
         vbox.addWidget(self._canvas)
         self.setLayout(vbox)
 
