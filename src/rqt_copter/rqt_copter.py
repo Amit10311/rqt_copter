@@ -80,7 +80,6 @@ class CopterPlugin(Plugin):
         # Initialize the Timer
         self._start_time = rospy.get_time()
         # A slow timer for the redrawing and the widget update.
-        # 11 Plots are expensive...
         self._slow_timer = QTimer(self)
         self._slow_timer.timeout.connect(self._slow_timer_update)
         self._slow_timer.start(50)
@@ -97,14 +96,53 @@ class CopterPlugin(Plugin):
         self.plot_scale = None
         self._state_subscriber = None
         self._status_subscriber = None
+        self._client = None
 
         # Add Event Functions
         self._widget.start_reset_plot_button.clicked.connect(self._reset_plots)
         self._widget.pause_resume_plot_button.clicked.connect(self._pause_resume_plots)
         self._widget.copter_namespace_button.clicked.connect(self._reset_subscriber)
+        self._widget.connect_dyn_rec.clicked.connect(self._dyn_reconf_connect)
 
-        # Bring up dynamic reconfigure (needed?)
-        # self._client = dynamic_reconfigure.client.Client("pose_sensor", timeout=2)
+        self._widget.scale_slider.valueChanged.connect(self._scale_slider_change)
+        self._widget.scale_spin_box.valueChanged.connect(self._scale_box_change)
+        self._widget.height_slider.valueChanged.connect(self._height_slider_change)
+        self._widget.height_spin_box.valueChanged.connect(self._height_box_change)
+
+        self._widget.apply_scale_button.clicked.connect(self._apply_scale)
+        self._widget.apply_height_button.clicked.connect(self._apply_height)
+
+    def _apply_height(self):
+        height = self._widget.height_spin_box.value()
+        print "Initializing Filter with height", height
+        self._client.update_configuration({"core_height": height})
+        self._client.update_configuration({"core_set_height": True})
+        self._client.update_configuration({"core_set_height": False})
+
+    def _apply_scale(self):
+        scale = self._widget.scale_spin_box.value()
+        print "Initializing Filter with scale", scale
+        self._client.update_configuration({"pose_initial_scale": scale})
+        self._client.update_configuration({"core_init_filter": True})
+        self._client.update_configuration({"core_init_filter": False})
+
+    def _dyn_reconf_connect(self):
+        services = dynamic_reconfigure.find_reconfigure_services()
+        service = None
+        for s in services:
+            if "msf" in s and not "core" in s:
+                service = s
+
+        if service is not None:
+            print "Connecting to dynamic_reconfigure service", service, "..."
+            try:
+                self._client = dynamic_reconfigure.client.Client(service, timeout=5)
+                print "Connected"
+                self._widget.dyn_rec_frame.setEnabled(1)
+            except:
+                print "No connection established"
+        else:
+            print "No suitable service found. Is msf running?"
 
     def _slow_timer_update(self):
         # Update all Plots if they exist:
@@ -189,6 +227,7 @@ class CopterPlugin(Plugin):
         # Activate the tab widget at first click
         if not self._widget.tab_widget.isEnabled():
             self._widget.tab_widget.setEnabled(1)
+            self._widget.dyn_rec_frame.setEnabled(0)
 
     def _state_subscriber_callback(self, input):
         # save current values for plotting in timerupdate
@@ -229,8 +268,6 @@ class CopterPlugin(Plugin):
         self._widget.plot_battery_voltage_layout.addWidget(self.plot_battery_voltage)
         self.plot_battery_voltage.add_curve('voltage', 'Voltage', [0], [0])
 
-        self.plot_battery_voltage.scale_axis_y(5, 15)
-
         # Position Plot
         # Check if plot already exists and remove it:
         if self.plot_position is not None:
@@ -242,8 +279,6 @@ class CopterPlugin(Plugin):
         self.plot_position.add_curve('x', 'x-position', [0], [0])
         self.plot_position.add_curve('y', 'y-position', [0], [0])
         self.plot_position.add_curve('z', 'z-position', [0], [0])
-
-        self.plot_position.scale_axis_y(-5, 5)
 
         # Velocity Plot
         # Check if plot already exists and remove it:
@@ -257,8 +292,6 @@ class CopterPlugin(Plugin):
         self.plot_velocity.add_curve('y', 'y-velocity', [0], [0])
         self.plot_velocity.add_curve('z', 'z-velocity', [0], [0])
 
-        self.plot_velocity.scale_axis_y(-5, 5)
-
         # Acceleration Bias Plot
         # Check if plot already exists and remove it:
         if self.plot_acceleration_bias is not None:
@@ -271,8 +304,6 @@ class CopterPlugin(Plugin):
         self.plot_acceleration_bias.add_curve('y', 'y-acc-bias', [0], [0])
         self.plot_acceleration_bias.add_curve('z', 'z-acc-bias', [0], [0])
 
-        self.plot_acceleration_bias.scale_axis_y(-5, 5)
-
         # Scale Plot
         # Check if plot already exists and remove it:
         if self.plot_scale is not None:
@@ -283,7 +314,17 @@ class CopterPlugin(Plugin):
         self._widget.plot_scale_layout.addWidget(self.plot_scale)
         self.plot_scale.add_curve('scale', 'visual scale', [0], [0])
 
-        self.plot_scale.scale_axis_y(-1, 1)
+    def _scale_slider_change(self, value):
+        self._widget.scale_spin_box.setValue(value/100)
+
+    def _scale_box_change(self, value):
+        self._widget.scale_slider.setValue(value*100)
+
+    def _height_slider_change(self, value):
+        self._widget.height_spin_box.setValue(value/100)
+
+    def _height_box_change(self, value):
+        self._widget.height_slider.setValue(value*100)
     
     def shutdown_plugin(self):
         self._slow_timer.stop()
