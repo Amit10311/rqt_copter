@@ -3,13 +3,20 @@ from __future__ import division
 import os
 import rospy
 import rospkg
-#import dynamic_reconfigure.client
+import dynamic_reconfigure.client
 
-# Import all necessary message types:
-from geometry_msgs.msg import TransformStamped
 # TODO get message information correct!
-from _ExtEkf import ExtEkf
-from _mav_status import mav_status
+try:
+    from asctec_hl_comm.msg import mav_status
+except:
+    from _mav_status import mav_status
+    print "mav_status import failed - using pre-build message"
+
+try:
+    from sensor_fusion_comm.msg import ExtEkf
+except:
+    from _ExtEkf import ExtEkf
+    print "ExtEkf import failed - using pre-build message"
 
 # Qt related imports:
 from qt_gui.plugin import Plugin
@@ -17,12 +24,14 @@ from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QTimer
 from python_qt_binding.QtGui import QWidget, QColor, QLabel, QIcon
 
-from mat_data_plot import MatDataPlot
+from .qwt_data_plot import QwtDataPlot
 
 
 class CopterPlugin(Plugin):
 
     # 'Buffer' for Plots
+    plot_start_time = -1
+
     voltage = 10
     status_time = 0
 
@@ -74,11 +83,11 @@ class CopterPlugin(Plugin):
         # 11 Plots are expensive...
         self._slow_timer = QTimer(self)
         self._slow_timer.timeout.connect(self._slow_timer_update)
-        self._slow_timer.start(200)
+        self._slow_timer.start(50)
         # Fast timer for adding plot data for smooth curves
         self._fast_timer = QTimer(self)
         self._fast_timer.timeout.connect(self._fast_timer_update)
-        self._fast_timer.start(50)
+        self._fast_timer.start(10)
 
         # Initialize all Plots and Subscribers
         self.plot_battery_voltage = None
@@ -101,15 +110,15 @@ class CopterPlugin(Plugin):
         # Update all Plots if they exist:
         if not self.pause:
             if self.plot_battery_voltage is not None:
-                self.plot_battery_voltage.redraw()
+                self.plot_battery_voltage.rescale_axis_y()
             if self.plot_position is not None:
-                self.plot_position.redraw()
+                self.plot_position.rescale_axis_y()
             if self.plot_velocity is not None:
-                self.plot_velocity.redraw()
+                self.plot_velocity.rescale_axis_y()
             if self.plot_acceleration_bias is not None:
-                self.plot_acceleration_bias.redraw()
+                self.plot_acceleration_bias.rescale_axis_y()
             if self.plot_scale is not None:
-                   self.plot_scale.redraw()
+                   self.plot_scale.rescale_axis_y()
 
         # Check if Voltage low
         if self.voltage < 10:
@@ -132,25 +141,25 @@ class CopterPlugin(Plugin):
         # This loop is seperate for performance.
         # Plots stay smooth but can be drawn in the slow timer loop in this way.
         if self.plot_battery_voltage is not None:
-            self.plot_battery_voltage.update_values('voltage', [self.status_time], [self.voltage])
+            self.plot_battery_voltage.update_value('voltage', self.status_time, self.voltage)
 
         if self.plot_position is not None:
-            self.plot_position.update_values('x', [self.state_time], [self.position[0]])
-            self.plot_position.update_values('y', [self.state_time], [self.position[1]])
-            self.plot_position.update_values('z', [self.state_time], [self.position[2]])
+            self.plot_position.update_value('x', self.state_time, self.position[0])
+            self.plot_position.update_value('y', self.state_time, self.position[1])
+            self.plot_position.update_value('z', self.state_time, self.position[2])
 
         if self.plot_velocity is not None:
-            self.plot_velocity.update_values('x', [self.state_time], [self.velocity[0]])
-            self.plot_velocity.update_values('y', [self.state_time], [self.velocity[1]])
-            self.plot_velocity.update_values('z', [self.state_time], [self.velocity[2]])
+            self.plot_velocity.update_value('x', self.state_time, self.velocity[0])
+            self.plot_velocity.update_value('y', self.state_time, self.velocity[1])
+            self.plot_velocity.update_value('z', self.state_time, self.velocity[2])
 
         if self.plot_acceleration_bias is not None:
-            self.plot_acceleration_bias.update_values('x', [self.state_time], [self.acceleration_bias[0]])
-            self.plot_acceleration_bias.update_values('y', [self.state_time], [self.acceleration_bias[1]])
-            self.plot_acceleration_bias.update_values('z', [self.state_time], [self.acceleration_bias[2]])
+            self.plot_acceleration_bias.update_value('x', self.state_time, self.acceleration_bias[0])
+            self.plot_acceleration_bias.update_value('y', self.state_time, self.acceleration_bias[1])
+            self.plot_acceleration_bias.update_value('z', self.state_time, self.acceleration_bias[2])
 
         if self.plot_scale is not None:
-            self.plot_scale.update_values('scale', [self.state_time], [self.scale])
+            self.plot_scale.update_value('scale', self.state_time, self.scale)
 
     def _pause_resume_plots(self):
         if self.pause is 0:
@@ -183,7 +192,10 @@ class CopterPlugin(Plugin):
 
     def _state_subscriber_callback(self, input):
         # save current values for plotting in timerupdate
-        self.state_time = input.header.stamp.to_sec()
+        if self.plot_start_time is -1:
+            self.plot_start_time = input.header.stamp.to_sec()
+
+        self.state_time = input.header.stamp.to_sec() - self.plot_start_time
         self.position = [input.state[0], input.state[1], input.state[2]]
         self.velocity = [input.state[3], input.state[4], input.state[5]]
         self.acceleration_bias = [input.state[6], input.state[7], input.state[8]]
@@ -191,7 +203,7 @@ class CopterPlugin(Plugin):
 
     def _status_subscriber_callback(self, input):
         # save current values for widget updates in timerupdate
-        self.status_time = input.header.stamp.to_sec()
+        self.status_time = input.header.stamp.to_sec() - self.plot_start_time
         self.voltage = input.battery_voltage
         self.cpu_load = input.cpu_load
         self.flight_mode_ll = input.flight_mode_ll
@@ -205,6 +217,7 @@ class CopterPlugin(Plugin):
     def _reset_plots(self):
         # Set the "Start" Button to "Reset"
         self._widget.start_reset_plot_button.setText("Reset")
+        self.plot_start_time = -1
 
         # Battery Voltage Plot
         # Check if plot already exists and remove it:
@@ -212,9 +225,11 @@ class CopterPlugin(Plugin):
             self._widget.plot_battery_voltage_layout.removeWidget(self.plot_battery_voltage)
             self.plot_battery_voltage.close()
         # Crate the new plot:
-        self.plot_battery_voltage = MatDataPlot(self._widget)
+        self.plot_battery_voltage = QwtDataPlot(self._widget)
         self._widget.plot_battery_voltage_layout.addWidget(self.plot_battery_voltage)
         self.plot_battery_voltage.add_curve('voltage', 'Voltage', [0], [0])
+
+        self.plot_battery_voltage.scale_axis_y(5, 15)
 
         # Position Plot
         # Check if plot already exists and remove it:
@@ -222,11 +237,13 @@ class CopterPlugin(Plugin):
             self._widget.plot_position_layout.removeWidget(self.plot_position)
             self.plot_position.close()
         # Crate the new plot:
-        self.plot_position = MatDataPlot(self._widget)
+        self.plot_position = QwtDataPlot(self._widget)
         self._widget.plot_position_layout.addWidget(self.plot_position)
         self.plot_position.add_curve('x', 'x-position', [0], [0])
         self.plot_position.add_curve('y', 'y-position', [0], [0])
         self.plot_position.add_curve('z', 'z-position', [0], [0])
+
+        self.plot_position.scale_axis_y(-5, 5)
 
         # Velocity Plot
         # Check if plot already exists and remove it:
@@ -234,11 +251,13 @@ class CopterPlugin(Plugin):
             self._widget.plot_velocity_layout.removeWidget(self.plot_velocity)
             self.plot_velocity.close()
         # Crate the new plot:
-        self.plot_velocity = MatDataPlot(self._widget)
+        self.plot_velocity = QwtDataPlot(self._widget)
         self._widget.plot_velocity_layout.addWidget(self.plot_velocity)
         self.plot_velocity.add_curve('x', 'x-velocity', [0], [0])
         self.plot_velocity.add_curve('y', 'y-velocity', [0], [0])
         self.plot_velocity.add_curve('z', 'z-velocity', [0], [0])
+
+        self.plot_velocity.scale_axis_y(-5, 5)
 
         # Acceleration Bias Plot
         # Check if plot already exists and remove it:
@@ -246,11 +265,13 @@ class CopterPlugin(Plugin):
             self._widget.plot_acceleration_bias_layout.removeWidget(self.plot_acceleration_bias)
             self.plot_acceleration_bias.close()
         # Crate the new plot:
-        self.plot_acceleration_bias = MatDataPlot(self._widget)
+        self.plot_acceleration_bias = QwtDataPlot(self._widget)
         self._widget.plot_acceleration_bias_layout.addWidget(self.plot_acceleration_bias)
         self.plot_acceleration_bias.add_curve('x', 'x-acc-bias', [0], [0])
         self.plot_acceleration_bias.add_curve('y', 'y-acc-bias', [0], [0])
         self.plot_acceleration_bias.add_curve('z', 'z-acc-bias', [0], [0])
+
+        self.plot_acceleration_bias.scale_axis_y(-5, 5)
 
         # Scale Plot
         # Check if plot already exists and remove it:
@@ -258,9 +279,11 @@ class CopterPlugin(Plugin):
             self._widget.plot_scale_layout.removeWidget(self.plot_scale)
             self.plot_scale.close()
         # Crate the new plot:
-        self.plot_scale = MatDataPlot(self._widget)
+        self.plot_scale = QwtDataPlot(self._widget)
         self._widget.plot_scale_layout.addWidget(self.plot_scale)
         self.plot_scale.add_curve('scale', 'visual scale', [0], [0])
+
+        self.plot_scale.scale_axis_y(-1, 1)
     
     def shutdown_plugin(self):
         self._slow_timer.stop()
