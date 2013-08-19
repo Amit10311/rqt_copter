@@ -3,10 +3,11 @@ from __future__ import division
 import os
 import rospy
 import rospkg
-import dynamic_reconfigure.client
 
 from asctec_hl_comm.msg import mav_status
 from sensor_fusion_comm.msg import ExtEkf
+from sensor_fusion_comm.srv import InitScale
+from sensor_fusion_comm.srv import InitHeight
 
 from qt_gui.plugin import Plugin
 from python_qt_binding import loadUi
@@ -91,47 +92,30 @@ class CopterPlugin(Plugin):
         self._widget.start_reset_plot_button.clicked.connect(self._reset_plots)
         self._widget.pause_resume_plot_button.clicked.connect(self._pause_resume_plots)
         self._widget.copter_namespace_button.clicked.connect(self._reset_subscriber)
-        self._widget.connect_dyn_rec.clicked.connect(self._dyn_reconf_connect)
 
         self._widget.scale_slider.valueChanged.connect(self._scale_slider_change)
         self._widget.scale_spin_box.valueChanged.connect(self._scale_box_change)
         self._widget.height_slider.valueChanged.connect(self._height_slider_change)
         self._widget.height_spin_box.valueChanged.connect(self._height_box_change)
 
-        self._widget.apply_scale_button.clicked.connect(self._apply_scale)
-        self._widget.apply_height_button.clicked.connect(self._apply_height)
+        self._widget.apply_scale_button.clicked.connect(self._init_scale)
+        self._widget.apply_height_button.clicked.connect(self._init_height)
 
-    def _apply_height(self):
-        height = self._widget.height_spin_box.value()
-        print "Initializing Filter with height", height
-        self._client.update_configuration({"core_height": height})
-        self._client.update_configuration({"core_set_height": True})
-        self._client.update_configuration({"core_set_height": False})
+    def _init_scale(self):
+        try:
+            initialize_msf_scale = rospy.ServiceProxy('/msf_pose_sensor/pose_sensor/initialize_msf_scale', InitScale)
+            res = initialize_msf_scale(self._widget.scale_spin_box.value())
+            print res.result
+        except rospy.ServiceException:
+            print "Service call failed"
 
-    def _apply_scale(self):
-        scale = self._widget.scale_spin_box.value()
-        print "Initializing Filter with scale", scale
-        self._client.update_configuration({"pose_initial_scale": scale})
-        self._client.update_configuration({"core_init_filter": True})
-        self._client.update_configuration({"core_init_filter": False})
-
-    def _dyn_reconf_connect(self):
-        services = dynamic_reconfigure.find_reconfigure_services()
-        service = None
-        for s in services:
-            if "msf" in s and not "core" in s:
-                service = s
-
-        if service is not None:
-            print "Connecting to dynamic_reconfigure service", service, "..."
-            try:
-                self._client = dynamic_reconfigure.client.Client(service, timeout=5)
-                print "Connected"
-                self._widget.dyn_rec_frame.setEnabled(1)
-            except:
-                print "No connection established"
-        else:
-            print "No suitable service found. Is msf running?"
+    def _init_height(self):
+        try:
+            initialize_msf_height = rospy.ServiceProxy('/msf_pose_sensor/pose_sensor/initialize_msf_height', InitHeight)
+            res = initialize_msf_height(self._widget.height_spin_box.value())
+            print res.result
+        except rospy.ServiceException:
+            print "Service call failed"
 
     def _slow_timer_update(self):
         # Update all Plots if they exist:
@@ -216,7 +200,6 @@ class CopterPlugin(Plugin):
         # Activate the tab widget at first click
         if not self._widget.tab_widget.isEnabled():
             self._widget.tab_widget.setEnabled(1)
-            self._widget.dyn_rec_frame.setEnabled(0)
 
     def _state_subscriber_callback(self, input):
         # save current values for plotting in timerupdate
