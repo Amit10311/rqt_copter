@@ -5,20 +5,9 @@ import rospy
 import rospkg
 import dynamic_reconfigure.client
 
-# TODO get message information correct!
-try:
-    from asctec_hl_comm.msg import mav_status
-except:
-    from _mav_status import mav_status
-    print "mav_status import failed - using pre-build message"
+from asctec_hl_comm.msg import mav_status
+from sensor_fusion_comm.msg import ExtEkf
 
-try:
-    from sensor_fusion_comm.msg import ExtEkf
-except:
-    from _ExtEkf import ExtEkf
-    print "ExtEkf import failed - using pre-build message"
-
-# Qt related imports:
 from qt_gui.plugin import Plugin
 from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QTimer
