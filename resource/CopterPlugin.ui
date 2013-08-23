@@ -352,7 +352,7 @@
            <item>
             <widget class="QPushButton" name="start_reset_plot_button">
              <property name="text">
-              <string>Start</string>
+              <string>Reset</string>
              </property>
             </widget>
            </item>
