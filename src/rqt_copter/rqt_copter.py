@@ -1,22 +1,23 @@
-from __future__ import division
-
 import os
 import rospy
 import rospkg
+import rosservice
+
+from functools import partial
 
 from asctec_hl_comm.msg import mav_status
 from sensor_fusion_comm.msg import ExtEkf
-from sensor_fusion_comm.srv import InitScale
-from sensor_fusion_comm.srv import InitHeight
 
 from qt_gui.plugin import Plugin
 from python_qt_binding import loadUi
 from python_qt_binding.QtCore import QTimer
-from python_qt_binding.QtGui import QWidget, QColor, QLabel, QIcon
+from python_qt_binding.QtGui import QWidget, QIcon
 
 from .qwt_data_plot import QwtDataPlot
+from .srv_widget import SrvWidget
 
-
+# Main widget for the copter GUI
+# TODO: Move the subscribers to seperate class?
 class CopterPlugin(Plugin):
 
     plot_start_time = -1
@@ -49,54 +50,35 @@ class CopterPlugin(Plugin):
             self._widget.setWindowTitle(self._widget.windowTitle() + (' (%d)' % context.serial_number()))
         context.add_widget(self._widget)
 
-        # Add Icon to Allert
+        # Add icons to the buttons
+        self._widget.pause_resume_plot_button.setIcon(QIcon.fromTheme('media-playback-pause'))
+        self._widget.start_reset_plot_button.setIcon(QIcon.fromTheme('view-refresh'))
+        self._widget.srv_refresh_button.setIcon(QIcon.fromTheme('view-refresh'))
         self._widget.battery_alert.setIcon(QIcon.fromTheme('dialog-warning'))
         self._widget.battery_alert.setVisible(0)
 
-        # Initialize the Timer
+        # Initialize the timer
         self._start_time = rospy.get_time()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._timer_update)
         self._timer.start(50)
 
-        # Initialize all Plots and Subscribers
+        # Initialize all plots and subscribers
         self._state_subscriber = None
         self._status_subscriber = None
         self._client = None
         self._create_plots()
+        self._get_init_services()
 
-        # Add Event Functions
+        # Add event functions
         self._widget.start_reset_plot_button.clicked.connect(self._reset_plots)
         self._widget.pause_resume_plot_button.clicked.connect(self._pause_resume_plots)
         self._widget.copter_namespace_textbox.returnPressed.connect(self._reset_subscriber)
         self._widget.copter_namespace_button.clicked.connect(self._reset_subscriber)
-
-        self._widget.scale_slider.valueChanged.connect(self._scale_slider_change)
-        self._widget.scale_spin_box.valueChanged.connect(self._scale_box_change)
-        self._widget.height_slider.valueChanged.connect(self._height_slider_change)
-        self._widget.height_spin_box.valueChanged.connect(self._height_box_change)
-
-        self._widget.apply_scale_button.clicked.connect(self._init_scale)
-        self._widget.apply_height_button.clicked.connect(self._init_height)
-
+        self._widget.srv_refresh_button.clicked.connect(self._refresh_init_services)
         self._widget.copter_namespace_textbox.setFocus()
 
-    def _init_scale(self):
-        try:
-            initialize_msf_scale = rospy.ServiceProxy('/msf_pose_sensor/pose_sensor/initialize_msf_scale', InitScale)
-            res = initialize_msf_scale(self._widget.scale_spin_box.value())
-            print res.result
-        except rospy.ServiceException:
-            print "Service call failed"
-
-    def _init_height(self):
-        try:
-            initialize_msf_height = rospy.ServiceProxy('/msf_pose_sensor/pose_sensor/initialize_msf_height', InitHeight)
-            res = initialize_msf_height(self._widget.height_spin_box.value())
-            print res.result
-        except rospy.ServiceException:
-            print "Service call failed"
-
+    # Update the displayed data in the widget
     def _timer_update(self):
         # Check if Voltage low
         if self.voltage < 10:
@@ -104,24 +86,22 @@ class CopterPlugin(Plugin):
         else:
             self._widget.battery_alert.setVisible(0)
 
-        # Update the status tab
-        self._widget.cpu_load_bar.setValue(self.cpu_load)
-        self._widget.flight_mode_ll_textbox.setText(self.flight_mode_ll)
-        self._widget.state_estimation_textbox.setText(self.state_estimation)
-        self._widget.position_control_textbox.setText(self.position_control)
-        self._widget.motor_status_textbox.setText(self.motor_status)
-        self._widget.flight_time_box.setValue(self.flight_time)
-        self._widget.gps_status_textbox.setText(self.gps_status)
-        self._widget.gps_num_satellites_box.setValue(self.gps_num_satellites)
-        self._widget.battery_voltage_display.setValue(self.voltage)
-
-        # Update all Plots if they exist:
+        # Only update the current tab
         tab = self._widget.tab_widget.currentIndex()
+        # This is the status tab update
         if tab is 0:
-            # this is the status tab
             self.plot_battery_voltage.rescale_axis_y()
+            self._widget.cpu_load_bar.setValue(self.cpu_load)
+            self._widget.flight_mode_ll_textbox.setText(self.flight_mode_ll)
+            self._widget.state_estimation_textbox.setText(self.state_estimation)
+            self._widget.position_control_textbox.setText(self.position_control)
+            self._widget.motor_status_textbox.setText(self.motor_status)
+            self._widget.flight_time_box.setValue(self.flight_time)
+            self._widget.gps_status_textbox.setText(self.gps_status)
+            self._widget.gps_num_satellites_box.setValue(self.gps_num_satellites)
+            self._widget.battery_voltage_display.setValue(self.voltage)
+        # This is the state-plot tab
         if tab is 1 and not self.pause:
-            # this is the state-plot tab
             self.plot_position.rescale_axis_y()
             self.plot_velocity.rescale_axis_y()
             self.plot_acceleration_bias.rescale_axis_y()
@@ -130,13 +110,29 @@ class CopterPlugin(Plugin):
     def _pause_resume_plots(self):
         if self.pause is 0:
             self.pause = 1
+            self._widget.pause_resume_plot_button.setIcon(QIcon.fromTheme('media-playback-start'))
             self._widget.pause_resume_plot_button.setText("Resume")
         else:
             self.pause = 0
+            self._widget.pause_resume_plot_button.setIcon(QIcon.fromTheme('media-playback-pause'))
             self._widget.pause_resume_plot_button.setText("Pause")
 
+    # Get all available msf-initialisation services
+    def _get_init_services(self):
+        self._init_services = []
+        service_names = rosservice.get_service_list()
+        for service_name in service_names:
+            if "initialize_msf" in service_name:
+                self._init_services.append(SrvWidget(self._widget.srv_container_layout, service_name))
+
+    def _refresh_init_services(self):
+        for init_service in self._init_services:
+            self._widget.srv_container_layout.removeWidget(init_service._widget)
+            init_service._widget.close()
+        self._get_init_services()
+
+    # Subscribe to rostopics according to the namespace
     def _reset_subscriber(self):
-        # Get the current namespace and the according topics
         namespace = self._widget.copter_namespace_textbox.text()
 
         state_topic = namespace + '/fcu/ekf_state_out'
@@ -152,33 +148,29 @@ class CopterPlugin(Plugin):
         self._state_subscriber = rospy.Subscriber(state_topic, ExtEkf, self._state_subscriber_callback)
         self._status_subscriber = rospy.Subscriber(status_topic, mav_status, self._status_subscriber_callback)
 
-        # Activate the tab widget at first click
-        if not self._widget.tab_widget.isEnabled():
-            self._widget.tab_widget.setEnabled(1)
-
     def _state_subscriber_callback(self, input):
         if self.plot_start_time is -1:
             self.plot_start_time = input.header.stamp.to_sec()
 
         self.state_time = input.header.stamp.to_sec() - self.plot_start_time
 
-        if self.plot_position is not None:
-            self.plot_position.update_value('x', self.state_time, input.state[0])
-            self.plot_position.update_value('y', self.state_time, input.state[1])
-            self.plot_position.update_value('z', self.state_time, input.state[2])
+        #if self.plot_position is not None:
+        self.plot_position.update_value('x', self.state_time, input.state[0])
+        self.plot_position.update_value('y', self.state_time, input.state[1])
+        self.plot_position.update_value('z', self.state_time, input.state[2])
 
-        if self.plot_velocity is not None:
-            self.plot_velocity.update_value('x', self.state_time, input.state[3])
-            self.plot_velocity.update_value('y', self.state_time, input.state[4])
-            self.plot_velocity.update_value('z', self.state_time, input.state[5])
+        #if self.plot_velocity is not None:
+        self.plot_velocity.update_value('x', self.state_time, input.state[3])
+        self.plot_velocity.update_value('y', self.state_time, input.state[4])
+        self.plot_velocity.update_value('z', self.state_time, input.state[5])
 
-        if self.plot_acceleration_bias is not None:
-            self.plot_acceleration_bias.update_value('x', self.state_time, input.state[6])
-            self.plot_acceleration_bias.update_value('y', self.state_time, input.state[7])
-            self.plot_acceleration_bias.update_value('z', self.state_time, input.state[8])
+        #if self.plot_acceleration_bias is not None:
+        self.plot_acceleration_bias.update_value('x', self.state_time, input.state[6])
+        self.plot_acceleration_bias.update_value('y', self.state_time, input.state[7])
+        self.plot_acceleration_bias.update_value('z', self.state_time, input.state[8])
 
-        if self.plot_scale is not None:
-            self.plot_scale.update_value('scale', self.state_time, input.state[9])
+        #if self.plot_scale is not None:
+        self.plot_scale.update_value('scale', self.state_time, input.state[9])
 
     def _status_subscriber_callback(self, input):
         self.status_time = input.header.stamp.to_sec() - self.plot_start_time
@@ -192,8 +184,8 @@ class CopterPlugin(Plugin):
         self.gps_status = input.gps_status
         self.gps_num_satellites = input.gps_num_satellites
 
-        if self.plot_battery_voltage is not None:
-            self.plot_battery_voltage.update_value('voltage', self.status_time, input.battery_voltage)
+        #if self.plot_battery_voltage is not None:
+        self.plot_battery_voltage.update_value('voltage', self.status_time, input.battery_voltage)
 
     def _create_plots(self):
         self.plot_start_time = -1
@@ -242,18 +234,6 @@ class CopterPlugin(Plugin):
 
         self._create_plots()
 
-    def _scale_slider_change(self, value):
-        self._widget.scale_spin_box.setValue(value/100)
-
-    def _scale_box_change(self, value):
-        self._widget.scale_slider.setValue(value*100)
-
-    def _height_slider_change(self, value):
-        self._widget.height_spin_box.setValue(value/100)
-
-    def _height_box_change(self, value):
-        self._widget.height_slider.setValue(value*100)
-    
     def shutdown_plugin(self):
         self._timer.stop()
         if self._state_subscriber is not None:
@@ -262,15 +242,7 @@ class CopterPlugin(Plugin):
             self._status_subscriber.unregister()
 
     def save_settings(self, plugin_settings, instance_settings):
-        # TODO save intrinsic configuration, usually using:
-        # instance_settings.set_value(k, v)
         pass
 
     def restore_settings(self, plugin_settings, instance_settings):
-        # TODO restore intrinsic configuration, usually using:
-        # v = instance_settings.value(k)
         pass
-
-    #def trigger_configuration(self):
-        # Comment in to signal that the plugin has a way to configure it
-        # Usually used to open a configuration dialog
